@@ -62,7 +62,7 @@ export default function DashboardLayout({
             const res = await fetch("/api/user", { cache: "no-store" });
             if (res.ok) {
                 const data = await res.json();
-                const monthlyLimit = data.monthlyLimit ?? 10;
+                const monthlyLimit = data.monthlyLimit ?? 5;
                 setCredits({
                     userId: data.userId ?? "",
                     plan: data.plan ?? "free",

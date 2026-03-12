@@ -1,16 +1,18 @@
 import { auth } from "@clerk/nextjs/server";
 
 const PRICE_MAPPING: Record<string, string> = {
-    "starter_monthly": process.env.NEXT_PUBLIC_PADDLE_PRICE_STARTER_MONTHLY || "pri_01kk48a3ag30jdg86w4mj6t3vm",
-    "growth_monthly": process.env.NEXT_PUBLIC_PADDLE_PRICE_GROWTH_MONTHLY || "pri_01kk48azf2tdv3kpg11vzcg497",
-    "pro_monthly": process.env.NEXT_PUBLIC_PADDLE_PRICE_PRO_MONTHLY || "pri_01kk48c7bq98e7e5tt4mq2br1s",
-    "starter_yearly": process.env.NEXT_PUBLIC_PADDLE_PRICE_STARTER_YEARLY || "pri_01kk48dyvfgxeg6g01f905r75v",
-    "growth_yearly": process.env.NEXT_PUBLIC_PADDLE_PRICE_GROWTH_YEARLY || "pri_01kk48etjaxhgzswtagfn43b0j",
-    "pro_yearly": process.env.NEXT_PUBLIC_PADDLE_PRICE_PRO_YEARLY || "pri_01kk48g7zhw6smjabnyarbtv34",
+    "starter_monthly": process.env.NEXT_PUBLIC_PADDLE_PRICE_STARTER_MONTHLY || "pri_01kkewa0zq9q2h9n4jf3dzppcz",
+    "basic_monthly": process.env.NEXT_PUBLIC_PADDLE_PRICE_BASIC_MONTHLY || "pri_01kkeveharsajd1j8jqmjz6p8y",
+    "growth_monthly": process.env.NEXT_PUBLIC_PADDLE_PRICE_GROWTH_MONTHLY || "pri_01kkevg12ce2pemtwkqyg0ja74",
+    "pro_monthly": process.env.NEXT_PUBLIC_PADDLE_PRICE_PRO_MONTHLY || "pri_01kkevhkv3zh5v61v9yrhazk90",
+    "starter_yearly": process.env.NEXT_PUBLIC_PADDLE_PRICE_STARTER_YEARLY || "pri_01kkevksxjk34bp98wywqdhjq0",
+    "basic_yearly": process.env.NEXT_PUBLIC_PADDLE_PRICE_BASIC_YEARLY || "pri_01kkevn74qmwvrfp27zvr6anag",
+    "growth_yearly": process.env.NEXT_PUBLIC_PADDLE_PRICE_GROWTH_YEARLY || "pri_01kkevptnbcgmn0sv5c4qs2s40",
+    "pro_yearly": process.env.NEXT_PUBLIC_PADDLE_PRICE_PRO_YEARLY || "pri_01kkevr1h59gf7mqsf4477b1mg",
     // Addons
-    "addon_200": process.env.NEXT_PUBLIC_PADDLE_PRICE_ADDON_200 || "",
-    "addon_600": process.env.NEXT_PUBLIC_PADDLE_PRICE_ADDON_600 || "",
-    "addon_1500": process.env.NEXT_PUBLIC_PADDLE_PRICE_ADDON_1500 || "",
+    "addon_200": "pri_01kk7hem70v9mne26n9xj4047p",
+    "addon_600": "pri_01kk7htz1mhmet73e0jpvfsfdg",
+    "addon_1000": "pri_01kk7r41j1esgf3gk7k19rkkh2",
 };
 
 export async function POST(req: Request) {
@@ -21,6 +23,30 @@ export async function POST(req: Request) {
         }
 
         const { planId } = await req.json();
+
+        // ─── ADDON CHECK ───
+        if (planId?.startsWith("addon_")) {
+            const { supabaseAdmin } = await import("@/lib/supabase-admin");
+
+            // Fetch subscription status from the unified view
+            const { data: userStats, error: dbError } = await supabaseAdmin
+                .from("user_credit_view")
+                .select("subscription_status")
+                .eq("clerk_id", userId)
+                .single();
+
+            if (dbError || !userStats) {
+                console.error("[Checkout API] Failed to fetch user subscription status:", dbError);
+                return Response.json({ error: "Failed to verify subscription status" }, { status: 500 });
+            }
+
+            if (userStats.subscription_status !== "active") {
+                console.warn(`[Checkout API] Blocked add-on purchase for user ${userId} (Status: ${userStats.subscription_status})`);
+                return Response.json({
+                    error: "Active subscription required to purchase extra credits."
+                }, { status: 403 });
+            }
+        }
 
         if (!planId) {
             console.error("[Checkout API] Missing planId in request body");
@@ -41,7 +67,11 @@ export async function POST(req: Request) {
 
         console.log(`[Checkout API] Creating transaction for user: ${userId}, planId: ${planId}, priceId: ${priceId}`);
 
-        const response = await fetch("https://sandbox-api.paddle.com/transactions", {
+        const paddleApiUrl = process.env.PADDLE_ENV === 'production'
+            ? "https://api.paddle.com/transactions"
+            : "https://sandbox-api.paddle.com/transactions";
+
+        const response = await fetch(paddleApiUrl, {
             method: "POST",
             headers: {
                 "Authorization": `Bearer ${process.env.PADDLE_API_KEY}`,
@@ -55,7 +85,7 @@ export async function POST(req: Request) {
                     }
                 ],
                 custom_data: {
-                    userId: userId
+                    user_id: userId
                 }
             })
         });

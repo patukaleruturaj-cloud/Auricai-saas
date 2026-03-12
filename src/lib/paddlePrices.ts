@@ -29,37 +29,50 @@ export type PaddleProduct = PaddleSubscriptionProduct | PaddleAddonProduct;
 
 export const PADDLE_PRICE_MAP: Record<string, PaddleProduct> = {
     // Subscriptions
-    [process.env.NEXT_PUBLIC_PADDLE_PRICE_STARTER_MONTHLY || "pri_01kk48a3ag30jdg86w4mj6t3vm"]: {
+    // Subscriptions
+    [process.env.NEXT_PUBLIC_PADDLE_PRICE_STARTER_MONTHLY || "pri_01kkewa0zq9q2h9n4jf3dzppcz"]: {
         type: "subscription",
         planType: "starter",
         billingCycle: "monthly",
-        credits: 400,
+        credits: 150,
     },
-    [process.env.NEXT_PUBLIC_PADDLE_PRICE_STARTER_YEARLY || "pri_01kk48dyvfgxeg6g01f905r75v"]: {
+    [process.env.NEXT_PUBLIC_PADDLE_PRICE_STARTER_YEARLY || "pri_01kkevksxjk34bp98wywqdhjq0"]: {
         type: "subscription",
         planType: "starter",
         billingCycle: "yearly",
+        credits: 150,
+    },
+    [process.env.NEXT_PUBLIC_PADDLE_PRICE_BASIC_MONTHLY || "pri_01kkeveharsajd1j8jqmjz6p8y"]: {
+        type: "subscription",
+        planType: "basic",
+        billingCycle: "monthly",
         credits: 400,
     },
-    [process.env.NEXT_PUBLIC_PADDLE_PRICE_GROWTH_MONTHLY || "pri_01kk48azf2tdv3kpg11vzcg497"]: {
+    [process.env.NEXT_PUBLIC_PADDLE_PRICE_BASIC_YEARLY || "pri_01kkevn74qmwvrfp27zvr6anag"]: {
+        type: "subscription",
+        planType: "basic",
+        billingCycle: "yearly",
+        credits: 400,
+    },
+    [process.env.NEXT_PUBLIC_PADDLE_PRICE_GROWTH_MONTHLY || "pri_01kkevg12ce2pemtwkqyg0ja74"]: {
         type: "subscription",
         planType: "growth",
         billingCycle: "monthly",
         credits: 1200,
     },
-    [process.env.NEXT_PUBLIC_PADDLE_PRICE_GROWTH_YEARLY || "pri_01kk48etjaxhgzswtagfn43b0j"]: {
+    [process.env.NEXT_PUBLIC_PADDLE_PRICE_GROWTH_YEARLY || "pri_01kkevptnbcgmn0sv5c4qs2s40"]: {
         type: "subscription",
         planType: "growth",
         billingCycle: "yearly",
         credits: 1200,
     },
-    [process.env.NEXT_PUBLIC_PADDLE_PRICE_PRO_MONTHLY || "pri_01kk48c7bq98e7e5tt4mq2br1s"]: {
+    [process.env.NEXT_PUBLIC_PADDLE_PRICE_PRO_MONTHLY || "pri_01kkevhkv3zh5v61v9yrhazk90"]: {
         type: "subscription",
         planType: "pro",
         billingCycle: "monthly",
         credits: 3000,
     },
-    [process.env.NEXT_PUBLIC_PADDLE_PRICE_PRO_YEARLY || "pri_01kk48g7zhw6smjabnyarbtv34"]: {
+    [process.env.NEXT_PUBLIC_PADDLE_PRICE_PRO_YEARLY || "pri_01kkevr1h59gf7mqsf4477b1mg"]: {
         type: "subscription",
         planType: "pro",
         billingCycle: "yearly",
@@ -67,22 +80,23 @@ export const PADDLE_PRICE_MAP: Record<string, PaddleProduct> = {
     },
 
     // Addon Credit Packs (placeholder price IDs — replace with real ones from Paddle)
-    [process.env.NEXT_PUBLIC_PADDLE_PRICE_ADDON_200 || "pri_addon_200_placeholder"]: {
+    // Addon Credit Packs
+    "pri_01kk7hem70v9mne26n9xj4047p": {
         type: "addon",
         credits: 200,
         label: "200 Credits",
-        price: 9,
+        price: 12,
     },
-    [process.env.NEXT_PUBLIC_PADDLE_PRICE_ADDON_600 || "pri_addon_600_placeholder"]: {
+    "pri_01kk7htz1mhmet73e0jpvfsfdg": {
         type: "addon",
         credits: 600,
         label: "600 Credits",
-        price: 19,
+        price: 29,
     },
-    [process.env.NEXT_PUBLIC_PADDLE_PRICE_ADDON_1500 || "pri_addon_1500_placeholder"]: {
+    "pri_01kk7r41j1esgf3gk7k19rkkh2": {
         type: "addon",
-        credits: 1500,
-        label: "1500 Credits",
+        credits: 1000,
+        label: "1000 Credits",
         price: 39,
     },
 };

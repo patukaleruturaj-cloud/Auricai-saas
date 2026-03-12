@@ -45,6 +45,18 @@ async function resolveProfileByPaddleSubId(paddleSubId: string): Promise<string 
     return data?.user_id ?? null;
 }
 
+async function resolveProfileByEmail(email: string): Promise<string | null> {
+    // Look up by email in profiles
+    const { data } = await supabaseAdmin
+        .from("profiles")
+        .select("id")
+        .eq("email", email)
+        .single();
+
+    // If not found, might be a clerk email mapping issue, but we try our best
+    return data?.id ?? null;
+}
+
 // ─── WEBHOOK HANDLER ───
 
 export async function POST(req: Request) {
@@ -107,24 +119,34 @@ export async function POST(req: Request) {
         // 4. Resolve user
         console.log(">>> [Webhook] Attempting to resolve user...");
         const customData = event.data?.customData || event.data?.custom_data;
+        const customerData = event.data?.customer || event.data?.customer_data;
+        const email = customerData?.email || event.data?.email;
+
         console.log(">>> [Webhook] Custom Data:", JSON.stringify(customData));
+        console.log(">>> [Webhook] Customer Email:", email);
 
         let profileId: string | null = null;
 
-        if (customData?.userId) {
-            console.log(`>>> [Webhook] Found userId in customData: ${customData.userId}. Resolving profile...`);
-            profileId = await resolveProfileId(customData.userId);
-            console.log(`>>> [Webhook] Resolved Profile ID: ${profileId}`);
+        // Priority 1: customData.user_id (new) or customData.userId (legacy)
+        const clerkUserId = customData?.user_id || customData?.userId;
+        if (clerkUserId) {
+            console.log(`>>> [Webhook] Priority 1: Resolved userId: ${clerkUserId}`);
+            profileId = await resolveProfileId(clerkUserId);
         }
 
-        // Fallback: look up by paddle subscription ID
+        // Priority 2: Paddle Subscription ID
         if (!profileId) {
-            const paddleSubId = event.data?.subscriptionId || event.data?.subscription_id || event.data?.id;
-            console.log(`>>> [Webhook] No profile yet. Checking fallback by Paddle Sub ID: ${paddleSubId}`);
+            const paddleSubId = event.data?.subscriptionId || event.data?.subscription_id || (eventType.startsWith('subscription') ? event.data?.id : null);
             if (paddleSubId) {
+                console.log(`>>> [Webhook] Priority 2: Checking by Paddle Sub ID: ${paddleSubId}`);
                 profileId = await resolveProfileByPaddleSubId(paddleSubId);
-                console.log(`>>> [Webhook] Fallback Resolved Profile ID: ${profileId}`);
             }
+        }
+
+        // Priority 3: Email lookup
+        if (!profileId && email) {
+            console.log(`>>> [Webhook] Priority 3: Checking by Email: ${email}`);
+            profileId = await resolveProfileByEmail(email);
         }
 
         if (!profileId) {
@@ -168,12 +190,14 @@ export async function POST(req: Request) {
                         const paddleSubId = tx.subscriptionId || tx.subscription_id || null;
                         console.log(`>>> [Webhook] Sub ID: ${paddleSubId}. Calling activate_plan RPC...`);
 
+                        const paddleCustomerId = tx.customerId || tx.customer_id;
                         const { error } = await supabaseAdmin.rpc("activate_plan", {
                             p_user_id: profileId,
                             p_plan_type: subProduct.planType,
                             p_billing_cycle: subProduct.billingCycle,
                             p_credits: subProduct.credits,
                             p_paddle_subscription_id: paddleSubId,
+                            p_paddle_customer_id: paddleCustomerId,
                         });
 
                         if (error) {
@@ -248,8 +272,28 @@ export async function POST(req: Request) {
                     break;
                 }
 
+                case "transaction.paid": {
+                    console.log(`>>> [Webhook] transaction.paid for ${profileId}. Handled via transaction.completed logic already, but logged here.`);
+                    await logWebhook(eventId, eventType, event.data, "processed", profileId);
+                    break;
+                }
+
+                case "transaction.payment_failed": {
+                    console.log(`>>> [Webhook] transaction.payment_failed for ${profileId}. Downgrading to free...`);
+                    const { error } = await supabaseAdmin.rpc("cancel_plan", {
+                        p_user_id: profileId,
+                    });
+                    if (error) {
+                        await supabaseAdmin.from("subscriptions_v2")
+                            .update({ status: "cancelled", plan_type: "free", updated_at: new Date().toISOString() })
+                            .eq("user_id", profileId);
+                    }
+                    await logWebhook(eventId, eventType, event.data, "processed", profileId, "Payment failed: user downgraded");
+                    break;
+                }
+
                 // ═══════════════════════════════════════
-                // SUBSCRIPTION CREATED / UPDATED
+                // SUBSCRIPTION CREATED / UPDATED / ACTIVATED
                 // ═══════════════════════════════════════
                 case "subscription.created":
                 case "subscription.updated":
@@ -257,8 +301,38 @@ export async function POST(req: Request) {
                     const sub = event.data;
                     const paddleSubId = sub.id;
                     const paddleStatus = sub.status;
+                    const items = sub.items || [];
+                    const priceId = items[0]?.price?.id;
 
-                    // Map Paddle status to our status
+                    console.log(`>>> [Webhook] Processing ${eventType} for sub ${paddleSubId}. Status: ${paddleStatus}`);
+
+                    // 1. Resolve product/credits
+                    let product = priceId ? getPaddleProduct(priceId) : null;
+                    if (product && product.type === "subscription") {
+                        const subProduct = product as PaddleSubscriptionProduct;
+
+                        // If it's becoming active/trialing, ensure the plan is activated in DB (granting credits)
+                        if (paddleStatus === "active" || paddleStatus === "trialing") {
+                            console.log(`>>> [Webhook] Activating plan via RPC for status: ${paddleStatus}`);
+                            const paddleCustomerId = sub.customerId || sub.customer_id;
+                            const { error } = await supabaseAdmin.rpc("activate_plan", {
+                                p_user_id: profileId,
+                                p_plan_type: subProduct.planType,
+                                p_billing_cycle: subProduct.billingCycle,
+                                p_credits: subProduct.credits,
+                                p_paddle_subscription_id: paddleSubId,
+                                p_paddle_customer_id: paddleCustomerId,
+                            });
+
+                            if (error) {
+                                console.error(">>> [Webhook] activate_plan RPC FAILED in sub event:", error.message);
+                            } else {
+                                console.log(">>> [Webhook] activate_plan RPC SUCCESS via sub event.");
+                            }
+                        }
+                    }
+
+                    // 2. Sync status regardless of whether we granted credits (handles past_due, etc.)
                     let dbStatus: string;
                     if (paddleStatus === "active" || paddleStatus === "trialing") {
                         dbStatus = "active";
@@ -266,8 +340,10 @@ export async function POST(req: Request) {
                         dbStatus = "past_due";
                     } else if (paddleStatus === "canceled" || paddleStatus === "cancelled") {
                         dbStatus = "cancelled";
+                    } else if (paddleStatus === "paused") {
+                        dbStatus = "paused";
                     } else {
-                        dbStatus = "active";
+                        dbStatus = paddleStatus;
                     }
 
                     await supabaseAdmin.from("subscriptions_v2")
@@ -278,7 +354,7 @@ export async function POST(req: Request) {
                         })
                         .eq("user_id", profileId);
 
-                    console.log(`[Webhook] ✓ ${eventType}: sub ${paddleSubId} → status ${dbStatus} for ${profileId}`);
+                    console.log(`[Webhook] ✓ ${eventType} processed for ${profileId}`);
                     await logWebhook(eventId, eventType, sub, "processed", profileId);
                     break;
                 }

@@ -9,11 +9,36 @@ const PAID_PLANS = [
     {
         name: "Starter",
         planType: "starter",
+        description: "Perfect for testing outbound strategies.",
+        monthlyPrice: 15,
+        msgs: 150,
+        features: [
+            "150 messages / month",
+            "3 strategic message variations",
+            "Core Context Intelligence",
+            "Standard processing",
+            "Email support",
+        ],
+        popular: false,
+        theme: {
+            glowColor: "rgba(251, 146, 60, 1)", // Orange/Amber
+            shimmerColor: "rgba(251, 146, 60, 0.4)",
+            bgTint: "rgba(251, 146, 60, 0.02)",
+            glowBase: 0.12,
+            glowHover: 0.20,
+            hoverLift: -6,
+            baseScale: 1,
+            hoverScale: 1.02,
+        }
+    },
+    {
+        name: "Basic",
+        planType: "basic",
         description: "For founders testing outbound.",
         monthlyPrice: 29,
         msgs: 400,
         features: [
-            "400 messages / month",
+            "400 credits / month",
             "3 strategic message variations",
             "Core Context Intelligence",
             "Standard processing",
@@ -35,10 +60,10 @@ const PAID_PLANS = [
         name: "Growth",
         planType: "growth",
         description: "For 1–2 SDR teams scaling outreach.",
-        monthlyPrice: 59,
+        monthlyPrice: 49,
         msgs: 1200,
         features: [
-            "1,200 messages / month",
+            "1,200 credits / month",
             "3 strategic message variations",
             "Advanced Context Depth",
             "Reply Rate Optimization",
@@ -62,10 +87,10 @@ const PAID_PLANS = [
         name: "Pro",
         planType: "pro",
         description: "For serious outbound teams maximizing reply rates.",
-        monthlyPrice: 89,
-        msgs: 2850,
+        monthlyPrice: 69,
+        msgs: 3000,
         features: [
-            "2,850 messages / month",
+            "3,000 credits / month",
             "3 strategic message variations",
             "Premium Context Intelligence",
             "Advanced Signal-Based Personalization",
@@ -159,9 +184,9 @@ export default function Pricing({
             <div
                 style={{
                     display: "grid",
-                    gridTemplateColumns: "repeat(3, 1fr)",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
                     gap: "1.5rem",
-                    maxWidth: "960px",
+                    maxWidth: "1200px",
                     margin: "0 auto",
                 }}
             >

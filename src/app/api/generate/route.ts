@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
-import { safeAIGeneration } from "@/lib/ai-provider";
+import { generateWithAI } from "@/lib/ai-provider";
 import { ensureUserProvisioned, deductCredit, refundCredit, getWallet } from "@/lib/credits";
 
 // ─── RATE LIMITING ───
@@ -45,6 +45,8 @@ export async function POST(req: Request) {
             );
         }
 
+        console.log("API KEY EXISTS:", !!process.env.GEMINI_API_KEY);
+
         // ─── INPUT VALIDATION ───
         const body = await req.json();
         const { bio, company, offer, tone: rawTone } = body;
@@ -76,7 +78,7 @@ export async function POST(req: Request) {
                         allowed: false,
                         credits_remaining: 0,
                         addon_credits: 0,
-                        monthly_limit: wallet?.monthly_limit ?? 10,
+                        monthly_limit: wallet?.monthly_limit ?? 5,
                     },
                 },
                 { status: 402 }
@@ -92,107 +94,57 @@ export async function POST(req: Request) {
         };
         const toneInstruction = toneMap[safeTone] ?? toneMap.friendly;
 
-        const MASTER_SYSTEM_INSTRUCTION = `You are an elite outbound strategist and LinkedIn DM copywriter.
+        const MASTER_SYSTEM_INSTRUCTION = `You are an elite outbound copywriter specializing in LinkedIn outreach.
+Your job is to write highly personalized, natural, attention-grabbing LinkedIn messages that feel like they were written by a thoughtful human.
 
-Your primary KPI is reply probability.
+Your goal is not to sell immediately.
+Your goal is to start a genuine conversation and maximize the probability of a reply.
 
-Your goal is to trigger curiosity, relevance, and low-friction response.
+Core rules:
+• Use details from the prospect bio
+• Messages must feel one-to-one
+• Avoid generic phrases
+• Avoid corporate buzzwords
+• Avoid sounding like automation
+• End with a natural curiosity question
 
-You generate high-converting, human-sounding LinkedIn messages across industries.
+Each message must:
+• be under 220 characters
+• be one short paragraph
+• feel conversational and human
 
-Never sound like a marketer. Never sound like a SaaS landing page.
+Return ONLY valid JSON in this format:
 
-Follow this framework internally before writing:
-
-LAYER 1 — BUSINESS UNDERSTANDING
-
-From the Prospect Bio and Company Context:
-
-Identify what they sell.
-Identify who they sell to.
-Infer likely revenue model.
-Infer one realistic growth bottleneck related to pipeline, positioning, or acquisition.
-Identify one sharp angle that connects their situation to the offer.
-Never assume scale, funding, or metrics unless explicitly stated.
-
-Do not output this reasoning.
-
-LAYER 2 — MESSAGE STRUCTURE (MANDATORY)
-
-The message must follow this flow:
-
-1. Specific observation about them (no generic praise).
-2. Light, relevant curiosity question OR subtle tension.
-3. Soft introduction of offer in one sentence.
-4. One low-pressure CTA.
-
-Keep it under 80 words.
-Use short sentences.
-One idea per sentence.
-No corporate tone.
-No buzzwords.
-No exaggerated claims.
-
-LAYER 3 — PSYCHOLOGICAL RULES
-
-Prioritize curiosity over pitching.
-Do not oversell.
-Make it easy to reply with a short answer.
-Reduce perceived sales pressure.
-Make it feel like a peer conversation.
-
-LAYER 4 — TONE ENGINE (apply throughout)
-
-${toneInstruction}
-
-LAYER 5 — HUMAN FILTER
-
-Before finalizing:
-
-If it sounds polished, corporate, or templated — rewrite it.
-If it sounds like marketing — rewrite it.
-It must feel like a real human typed it in 60 seconds.
-
-LAYER 6 — EDGE CASE HANDLING
-
-If the Prospect Bio is short or vague:
-- Infer carefully.
-- Avoid over-assuming.
-- Stay grounded in visible information.
-
-LAYER 7 — STRICT WORD LIMITS
-
-Each DM must be between 45–75 words.
-Follow-up must be under 60 words.
-Subject line must be under 7 words.
-
-LAYER 8 — FINAL VALIDATION PASS
-
-Before returning the final output:
-- Ensure each DM sounds human.
-- Ensure no corporate language remains.
-- Ensure word limits are respected.
-If any rule is violated, rewrite internally before returning JSON.
-
-YOUR OUTPUT MUST BE VALID JSON ONLY — NO MARKDOWN, NO COMMENTARY:
 {
-  "dms": ["DM variation 1", "DM variation 2", "DM variation 3"],
-  "followUp": "A single follow-up message to send 3–5 days later if no reply",
-  "subjectLine": "Best email subject line if sending via email"
-}`;
+ "openers": [
+  "opener 1",
+  "opener 2",
+  "opener 3"
+ ],
+ "subject": "short subject",
+ "follow_up": "short follow up message"
+}
 
-        const userPrompt = `PROSPECT BIO:
+No markdown.
+No explanations.
+Tone specification: ${toneInstruction}`;
+
+        const userPrompt = `Prospect Bio:
 ${safeBio}
 
-COMPANY CONTEXT:
+Company Description:
 ${safeCompany || "Not provided"}
 
-YOUR OFFER / VALUE PROP:
+Offer:
 ${safeOffer}
 
-Generate exactly 3 DM variations, 1 follow-up, and 1 subject line. Return ONLY valid JSON.`;
+Tone:
+${safeTone}
+
+Generate exactly 3 variations. Return ONLY valid JSON.`;
 
         const fullPrompt = MASTER_SYSTEM_INSTRUCTION + "\n\n" + userPrompt;
+        console.log("AI_PROMPT:", fullPrompt);
 
         // ─── STEP 4: DEDUCT CREDIT (atomic RPC — concurrent safe) ───
         const deductResult = await deductCredit(clerkId);
@@ -211,27 +163,81 @@ Generate exactly 3 DM variations, 1 follow-up, and 1 subject line. Return ONLY v
             );
         }
 
-        // ─── STEP 5: GENERATE AI OUTPUT ───
-        let result;
+        // ─── STEP 5: GENERATE AI OUTPUT WITH TIERED RETRY LOOP ───
+        let result: any = null;
+        let attempts = 0;
+        const MAX_TOTAL_ATTEMPTS = 3;
+
+        const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
         try {
-            const rawResponse = await safeAIGeneration(fullPrompt);
-            const resultRaw = rawResponse.replace(/```json\n?|\n?```/g, "").trim() || "{}";
-            let parsed;
-            try {
-                parsed = JSON.parse(resultRaw);
-            } catch {
-                throw new Error("AI returned invalid JSON format.");
+            while (attempts < MAX_TOTAL_ATTEMPTS) {
+                try {
+                    // Tiered delays: 0ms, 800ms, 1500ms
+                    if (attempts === 1) await sleep(800);
+                    if (attempts === 2) await sleep(1500);
+
+                    console.log("GENERATION STARTED");
+                    const rawResponse = await generateWithAI(fullPrompt, {
+                        temperature: 0.7,
+                        top_p: 0.9,
+                        maxOutputTokens: 4096,
+                        responseMimeType: "application/json",
+                    });
+
+                    // Part 2: Fix JSON Parsing Errors - Robust Cleaning
+                    const cleaned = rawResponse
+                        .replace(/```json/g, "")
+                        .replace(/```/g, "")
+                        .replace(/`json/g, "")
+                        .replace(/`/g, "")
+                        .trim();
+
+                    let parsed;
+                    try {
+                        parsed = JSON.parse(cleaned);
+                    } catch (parseErr) {
+                        const firstBrace = cleaned.indexOf('{');
+                        const lastBrace = cleaned.lastIndexOf('}');
+                        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+                            parsed = JSON.parse(cleaned.substring(firstBrace, lastBrace + 1));
+                        } else {
+                            throw new Error("AI returned invalid JSON format.");
+                        }
+                    }
+
+                    let dms = parsed.openers || parsed.dms;
+                    if (!dms || !Array.isArray(dms) || dms.length === 0) {
+                        throw new Error("AI returned malformed JSON structure.");
+                    }
+
+                    dms = dms.map((dm: any) => {
+                        const text = String(dm);
+                        return text.length > 220 ? text.substring(0, 217) + "..." : text;
+                    });
+
+                    result = {
+                        dms: dms.slice(0, 3),
+                        followUp: parsed.follow_up || parsed.followUp || "Just checking in to see if you saw my previous message.",
+                        subjectLine: parsed.subject || parsed.subjectLine || "Quick question"
+                    };
+
+                    break; // Success!
+
+                } catch (err: any) {
+                    attempts++;
+                    console.error(`AI GENERATION ERROR (Attempt ${attempts}):`, err);
+                    if (attempts >= MAX_TOTAL_ATTEMPTS) {
+                        throw err; // Final attempt failed, move to outer catch for refund
+                    }
+                }
             }
-            result = parsed;
-            if (!result || !result.dms || !result.followUp) {
-                throw new Error("AI returned malformed JSON structure.");
-            }
-        } catch (err: any) {
-            // Generation failed — REFUND THE CREDIT
-            console.error("[generate] AI error:", err.message);
+        } catch (fatalErr) {
+            console.error("[generate] AI fatal failure. Triggering refund.");
             await refundCredit(clerkId);
-            return NextResponse.json({ error: err.message }, { status: 500 });
+            throw new Error("AI generation failed after multiple attempts. Your credit has been refunded.");
         }
+
 
         // ─── STEP 6: SAVE GENERATION TO DATABASE ───
         const { error: histErr } = await supabaseAdmin.from("generations").insert({
@@ -273,9 +279,14 @@ Generate exactly 3 DM variations, 1 follow-up, and 1 subject line. Return ONLY v
         });
     } catch (error: any) {
         console.error("[generate] Unhandled error:", error);
+
+        let status = 500;
+        if (error.status === 429 || error.message?.includes("429")) status = 429;
+        if (error.status === 503 || error.message?.includes("503")) status = 503;
+
         return NextResponse.json(
-            { error: "Internal Server Error", details: error.message ?? "Unknown error" },
-            { status: 500 }
+            { error: error.message || "Internal Server Error", details: error.message ?? "Unknown error" },
+            { status }
         );
     }
 }

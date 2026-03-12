@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
     CreditCard,
     Clock,
@@ -11,10 +11,12 @@ import {
     ArrowRight,
     CheckCircle,
     Sparkles,
+    Wallet,
 } from "lucide-react";
 import { useUser } from "@clerk/nextjs";
 import { motion, AnimatePresence } from "framer-motion";
-import { plans } from "@/lib/plans";
+import { plans, PLAN_LIMITS } from "@/lib/plans";
+import { supabaseClient } from "@/lib/supabase-client";
 
 // ─── TYPES ───
 
@@ -25,6 +27,7 @@ interface BillingState {
     creditsRemaining: number;
     monthlyLimit: number;
     addonCredits: number;
+    totalCredits: number;
     creditsUsed: number;
     nextResetDate: string | null;
 }
@@ -34,6 +37,7 @@ interface BillingState {
 const PLAN_LABELS: Record<string, string> = {
     free: "Free",
     starter: "Starter",
+    basic: "Basic",
     growth: "Growth",
     pro: "Pro",
 };
@@ -75,6 +79,12 @@ const ADDON_THEMES = [
 
 const PLAN_THEMES: Record<string, { glow: string; glowHover: string; border: string; accent: string }> = {
     starter: {
+        glow: "rgba(251, 146, 60, 0.2)",
+        glowHover: "rgba(251, 146, 60, 0.45)",
+        border: "rgba(251, 146, 60, 0.15)",
+        accent: "#fb923c",
+    },
+    basic: {
         glow: "rgba(59, 130, 246, 0.2)",
         glowHover: "rgba(59, 130, 246, 0.45)",
         border: "rgba(59, 130, 246, 0.15)",
@@ -98,10 +108,26 @@ const UPGRADE_PLANS = [
     {
         slug: "starter",
         name: "Starter",
-        description: "For individuals & early testers.",
+        description: "Perfect for testing outbound strategies.",
         priceMonthly: plans.starter.price_monthly,
         priceYearly: plans.starter.price_yearly / 12,
         msgs: plans.starter.credits,
+        features: [
+            "150 messages / month",
+            "3 strategic message variations",
+            "Core Context Intelligence",
+            "Standard processing",
+            "Email support",
+        ],
+        buttonLabel: "Get Started",
+    },
+    {
+        slug: "basic",
+        name: "Basic",
+        description: "For individuals & early testers.",
+        priceMonthly: plans.basic.price_monthly,
+        priceYearly: plans.basic.price_yearly / 12,
+        msgs: plans.basic.credits,
         features: [
             "400 messages / month",
             "3 strategic message variations",
@@ -150,18 +176,18 @@ const UPGRADE_PLANS = [
 const ADDON_PACKS = [
     {
         credits: 200,
-        price: 9,
-        priceId: process.env.NEXT_PUBLIC_PADDLE_PRICE_ADDON_200 || "pri_addon_200_placeholder",
+        price: 12,
+        priceId: "pri_01kk7hem70v9mne26n9xj4047p",
     },
     {
         credits: 600,
-        price: 19,
-        priceId: process.env.NEXT_PUBLIC_PADDLE_PRICE_ADDON_600 || "pri_addon_600_placeholder",
+        price: 29,
+        priceId: "pri_01kk7htz1mhmet73e0jpvfsfdg",
     },
     {
-        credits: 1500,
+        credits: 1000,
         price: 39,
-        priceId: process.env.NEXT_PUBLIC_PADDLE_PRICE_ADDON_1500 || "pri_addon_1500_placeholder",
+        priceId: "pri_01kk7r41j1esgf3gk7k19rkkh2",
     },
 ];
 
@@ -196,9 +222,10 @@ export default function BillingPage() {
                     plan: data.plan ?? "free",
                     billingInterval: data.billingInterval ?? "monthly",
                     status: data.status ?? "active",
-                    creditsRemaining: data.creditsRemaining ?? 10,
-                    monthlyLimit: data.monthlyLimit ?? 10,
+                    creditsRemaining: data.creditsRemaining ?? PLAN_LIMITS.free,
+                    monthlyLimit: data.monthlyLimit ?? PLAN_LIMITS.free,
                     addonCredits: data.addonCredits ?? 0,
+                    totalCredits: data.totalCredits ?? (data.creditsRemaining + data.addonCredits),
                     creditsUsed: data.creditsUsed ?? 0,
                     nextResetDate: data.nextResetDate ?? null,
                 });
@@ -212,7 +239,33 @@ export default function BillingPage() {
 
     useEffect(() => {
         fetchBilling();
-    }, [fetchBilling]);
+
+        // ─── REALTIME WALLET SUBSCRIPTION ───
+        if (!user) return;
+
+        console.log("[Realtime] Subscribing to wallet updates for user:", user.id);
+        const channel = supabaseClient
+            .channel(`wallet_updates_${user.id}`)
+            .on(
+                "postgres_changes",
+                {
+                    event: "UPDATE",
+                    schema: "public",
+                    table: "wallet",
+                    filter: `user_id=eq.${user.id}`,
+                },
+                (payload) => {
+                    console.log("[Realtime] Wallet update detected, refreshing data...", payload);
+                    fetchBilling();
+                }
+            )
+            .subscribe();
+
+        return () => {
+            console.log("[Realtime] Unsubscribing from wallet updates");
+            supabaseClient.removeChannel(channel);
+        };
+    }, [fetchBilling, user]);
 
     const handleCheckout = async (planId: string) => {
         setCheckoutLoading(planId);
@@ -296,6 +349,87 @@ export default function BillingPage() {
             variants={staggerContainer}
             style={{ display: "flex", flexDirection: "column", gap: "2rem" }}
         >
+            {/* ══════════════════════════════════════════
+                SECTION 0 — TOTAL CREDITS SUMMARY
+               ══════════════════════════════════════════ */}
+            {billing && (
+                <motion.div
+                    variants={fadeInUp}
+                    transition={{ duration: 0.5 }}
+                    style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+                        gap: "1rem",
+                    }}
+                >
+                    {/* Main Total Card */}
+                    <div className="glass-panel" style={{
+                        padding: "1.5rem",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "1.25rem",
+                        background: "linear-gradient(135deg, rgba(168, 85, 247, 0.15) 0%, rgba(79, 70, 229, 0.05) 100%)",
+                        border: "1px solid rgba(168, 85, 247, 0.3)",
+                        boxShadow: "0 8px 32px rgba(168, 85, 247, 0.15)",
+                        position: "relative",
+                        overflow: "hidden",
+                    }}>
+                        <div style={{
+                            position: "absolute",
+                            top: "-20px",
+                            right: "-20px",
+                            width: "100px",
+                            height: "100px",
+                            background: "radial-gradient(circle, rgba(168, 85, 247, 0.2) 0%, transparent 70%)",
+                            pointerEvents: "none",
+                        }} />
+
+                        <div style={{
+                            width: "48px",
+                            height: "48px",
+                            borderRadius: "12px",
+                            background: "rgba(168, 85, 247, 0.2)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            color: "#a855f7",
+                        }}>
+                            <Wallet size={24} />
+                        </div>
+                        <div>
+                            <p style={{ fontSize: "0.75rem", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.25rem" }}>
+                                Total Available Credits
+                            </p>
+                            <h2 style={{ fontSize: "2rem", fontWeight: "800", background: "linear-gradient(to right, #fff, #a855f7)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+                                {billing.totalCredits.toLocaleString()}
+                            </h2>
+                        </div>
+                    </div>
+
+                    {/* Breakdown Card */}
+                    <div className="glass-panel" style={{
+                        padding: "1.25rem 1.5rem",
+                        display: "flex",
+                        flexDirection: "column",
+                        justifyContent: "center",
+                        gap: "0.5rem",
+                    }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span style={{ fontSize: "0.875rem", color: "var(--text-secondary)" }}>Monthly Credits:</span>
+                            <span style={{ fontWeight: "600" }}>{billing.creditsRemaining.toLocaleString()}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span style={{ fontSize: "0.875rem", color: "var(--text-secondary)" }}>Extra Credits:</span>
+                            <span style={{ fontWeight: "600", color: "#a855f7" }}>{billing.addonCredits.toLocaleString()}</span>
+                        </div>
+                        <div style={{ height: "1px", background: "rgba(255,255,255,0.06)", margin: "4px 0" }} />
+                        <div style={{ display: "flex", justifyContent: "flex-end", fontSize: "0.75rem", color: "var(--text-secondary)", fontStyle: "italic" }}>
+                            * Extra credits never expire
+                        </div>
+                    </div>
+                </motion.div>
+            )}
+
             {/* Page Header */}
             <motion.div variants={fadeInUp} transition={{ duration: 0.5 }}>
                 <h1 style={{ fontSize: "2rem", fontWeight: "700", marginBottom: "0.5rem" }}>
@@ -371,7 +505,7 @@ export default function BillingPage() {
                         )}
                     </div>
                     <p style={{ marginTop: "0.5rem", fontSize: "0.875rem", color: "var(--text-secondary)" }}>
-                        {billing?.monthlyLimit ?? 10} messages per month
+                        {billing?.monthlyLimit ?? PLAN_LIMITS.free} messages per month
                     </p>
                     <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.25rem", fontSize: "0.8rem", color: "var(--text-secondary)" }}>
                         <Clock size={14} />
@@ -512,7 +646,7 @@ export default function BillingPage() {
             {/* ══════════════════════════════════════════
                 SECTION 3 — BUY EXTRA CREDITS
                ══════════════════════════════════════════ */}
-            {billing && billing.plan !== "free" && billing.status === "active" && (
+            {billing && billing.plan !== "free" && (
                 <motion.div variants={fadeInUp} transition={{ duration: 0.5 }}>
                     <h3 style={{ fontSize: "1.25rem", fontWeight: "600", marginBottom: "0.5rem" }}>
                         <Package size={20} style={{ display: "inline", marginRight: "0.5rem", verticalAlign: "middle" }} />
@@ -521,6 +655,35 @@ export default function BillingPage() {
                     <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", marginBottom: "1.25rem" }}>
                         Extra credits never expire and are used after your monthly credits run out.
                     </p>
+
+                    {/* Active Subscription Requirement Warning */}
+                    <AnimatePresence>
+                        {billing.status !== "active" && (
+                            <motion.div
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: "auto" }}
+                                exit={{ opacity: 0, height: 0 }}
+                                style={{
+                                    marginBottom: "1.5rem",
+                                    padding: "1rem",
+                                    background: "rgba(248, 113, 113, 0.1)",
+                                    border: "1px solid rgba(248, 113, 113, 0.2)",
+                                    borderRadius: "12px",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "0.75rem",
+                                    color: "#f87171",
+                                    fontSize: "0.875rem",
+                                }}
+                            >
+                                <AlertTriangle size={18} />
+                                <span>
+                                    Extra credits can only be purchased with an active subscription.
+                                    Renew your plan to buy additional credits.
+                                </span>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
 
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "1rem" }}>
                         {ADDON_PACKS.map((pack, i) => {
@@ -591,9 +754,10 @@ export default function BillingPage() {
                                                 "from-yellow-500 to-orange-500 shadow-yellow-400/30 hover:shadow-yellow-400/60 hover:from-yellow-400 hover:to-orange-400"
                                             }`}
                                         style={{
-                                            opacity: checkoutLoading === planId ? 0.6 : 1,
+                                            opacity: (checkoutLoading === planId || billing.status !== "active") ? 0.6 : 1,
+                                            cursor: billing.status !== "active" ? "not-allowed" : "pointer",
                                         }}
-                                        disabled={!!checkoutLoading}
+                                        disabled={!!checkoutLoading || billing.status !== "active"}
                                         onClick={() => handleCheckout(planId)}
                                     >
                                         {checkoutLoading === planId ? (

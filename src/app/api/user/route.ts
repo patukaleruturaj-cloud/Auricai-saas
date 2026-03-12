@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { ensureUserProvisioned, getWallet, getSubscription } from "@/lib/credits";
+import { PLAN_LIMITS } from "@/lib/plans";
 
 // Prevent Next.js from caching this route
 export const dynamic = "force-dynamic";
@@ -34,8 +35,8 @@ export async function GET() {
                 plan: "free",
                 billingInterval: "monthly",
                 status: "active",
-                creditsRemaining: 10,
-                monthlyLimit: 10,
+                creditsRemaining: PLAN_LIMITS.free,
+                monthlyLimit: PLAN_LIMITS.free,
                 addonCredits: 0,
                 creditsUsed: 0,
                 nextResetDate: thirtyDays.toISOString(),
@@ -44,14 +45,11 @@ export async function GET() {
 
         const plan = subscription?.plan_type ?? "free";
 
-        const PLAN_LIMITS: Record<string, number> = {
-            free: 10,
-            starter: 400,
-            growth: 1200,
-            pro: 3000
-        };
-
-        const monthlyLimit = PLAN_LIMITS[plan] ?? 10;
+        // Use wallet.monthly_limit (set by activate_plan RPC) as primary source,
+        // fall back to PLAN_LIMITS from plans.ts only as a safety net
+        const monthlyLimit = wallet.monthly_limit > 0
+            ? wallet.monthly_limit
+            : (PLAN_LIMITS[plan as keyof typeof PLAN_LIMITS] ?? 5);
         const creditsUsed = Math.max(0, monthlyLimit - wallet.credits_remaining);
 
         return NextResponse.json({
@@ -63,6 +61,7 @@ export async function GET() {
             creditsRemaining: wallet.credits_remaining,
             monthlyLimit,
             addonCredits: wallet.addon_credits,
+            totalCredits: wallet.credits_remaining + wallet.addon_credits,
             creditsUsed,
             lastResetDate: wallet.last_reset_at,
             nextResetDate: wallet.next_reset_at,

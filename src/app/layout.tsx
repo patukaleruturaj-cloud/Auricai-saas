@@ -15,6 +15,8 @@ export const metadata: Metadata = {
   icons: { icon: "/logo.png" }
 };
 
+import Footer from "@/components/Footer";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -25,6 +27,7 @@ export default function RootLayout({
       <html lang="en">
         <body className={`${inter.variable} antialiased`}>
           {children}
+          <Footer />
           <PaddleInitializer />
         </body>
       </html>

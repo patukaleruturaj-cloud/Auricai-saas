@@ -63,7 +63,7 @@ export async function ensureUserProvisioned(
     if (existing?.id) {
         // Ensure wallet + subscription exist
         await supabaseAdmin.from("wallet").upsert(
-            { user_id: existing.id, monthly_limit: 10, credits_remaining: 10, addon_credits: 0 },
+            { user_id: existing.id, monthly_limit: 5, credits_remaining: 5, addon_credits: 0 },
             { onConflict: "user_id", ignoreDuplicates: true }
         );
         await supabaseAdmin.from("subscriptions_v2").upsert(
@@ -89,8 +89,8 @@ export async function ensureUserProvisioned(
 
     await supabaseAdmin.from("wallet").insert({
         user_id: profileId,
-        monthly_limit: 10,
-        credits_remaining: 10,
+        monthly_limit: 5,
+        credits_remaining: 5,
         addon_credits: 0,
     });
 
@@ -103,8 +103,8 @@ export async function ensureUserProvisioned(
 
     await supabaseAdmin.from("credit_transactions").insert({
         user_id: profileId,
-        amount: 10,
-        balance_after: 10,
+        amount: 5,
+        balance_after: 5,
         type: "credit",
         reason: "initial free credits",
     });
@@ -133,8 +133,8 @@ export async function getWallet(clerkId: string): Promise<Wallet | null> {
 
     return {
         user_id: wallet.user_id,
-        monthly_limit: wallet.monthly_limit ?? 10,
-        credits_remaining: wallet.credits_remaining ?? 10,
+        monthly_limit: wallet.monthly_limit ?? 5,
+        credits_remaining: wallet.credits_remaining ?? 5,
         addon_credits: wallet.addon_credits ?? 0,
         last_reset_at: wallet.last_reset_at ?? null,
         next_reset_at: wallet.next_reset_at ?? null,
@@ -217,17 +217,12 @@ export async function refundCredit(clerkId: string): Promise<void> {
     const profileId = await resolveProfileId(clerkId);
     if (!profileId) return;
 
-    // Get current wallet state
-    const { data: wallet } = await supabaseAdmin
-        .from("wallet")
-        .select("credits_remaining, monthly_limit")
-        .eq("user_id", profileId)
-        .single();
+    // Call atomic refund RPC (handles pool logic and row locking)
+    const { error } = await supabaseAdmin.rpc("refund_credit_v3", {
+        p_user_id: profileId,
+    });
 
-    if (wallet) {
-        const newCredits = Math.min(wallet.credits_remaining + 1, wallet.monthly_limit);
-        await supabaseAdmin.from("wallet")
-            .update({ credits_remaining: newCredits, updated_at: new Date().toISOString() })
-            .eq("user_id", profileId);
+    if (error) {
+        console.error("[credits] refund_credit_v3 RPC error:", error);
     }
 }

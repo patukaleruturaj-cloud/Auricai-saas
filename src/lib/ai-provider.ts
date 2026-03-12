@@ -1,66 +1,74 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import OpenAI from "openai";
+// ─── Gemini 2.5 Flash — Direct REST API ───
+// Replaces @google/generative-ai SDK with direct fetch() for full control.
 
-const provider = process.env.AI_PROVIDER || "gemini";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_ENDPOINT =
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 
-async function generateWithAI(prompt: string): Promise<string> {
-    if (provider === "gemini") {
-        if (!process.env.GEMINI_API_KEY) {
-            throw new Error("Gemini API key is missing. Please configure GEMINI_API_KEY in environment variables.");
-        }
-
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-
-        const result = await model.generateContent(prompt);
-        return result.response.text();
-    }
-
-    if (provider === "openai") {
-        if (!process.env.OPENAI_API_KEY) {
-            throw new Error("OpenAI API key is missing. Please configure OPENAI_API_KEY in environment variables.");
-        }
-
-        const openai = new OpenAI({
-            apiKey: process.env.OPENAI_API_KEY,
-        });
-
-        const response = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: [{ role: "user", content: prompt }],
-        });
-
-        return response.choices[0].message.content || "";
-    }
-
-    throw new Error("Invalid AI provider configured.");
+if (!GEMINI_API_KEY) {
+    console.warn("[ai-provider] WARNING: GEMINI_API_KEY is missing from environment variables");
 }
 
-export async function safeAIGeneration(prompt: string) {
-    const start = Date.now();
+export interface AIOptions {
+    temperature?: number;
+    top_p?: number;
+    maxOutputTokens?: number;
+    responseMimeType?: string;
+}
 
-    try {
-        console.log("AI Provider:", provider);
-        console.log("Gemini key exists:", !!process.env.GEMINI_API_KEY);
-        console.log("OpenAI key exists:", !!process.env.OPENAI_API_KEY);
+export async function generateWithAI(prompt: string, options?: AIOptions): Promise<string> {
+    console.log("GENERATION STARTED");
+    console.log("Using Gemini 2.5 Flash model (direct REST API)");
 
-        const result = await generateWithAI(prompt);
-
-        console.log("AI duration:", Date.now() - start);
-
-        if (!result || typeof result !== "string") {
-            throw new Error("AI returned empty or invalid response.");
-        }
-
-        return result;
-
-    } catch (err: any) {
-        console.error("AI EXECUTION ERROR:", err);
-
-        throw new Error(
-            err?.message ||
-            err?.response?.data?.error?.message ||
-            "Unknown AI execution error"
-        );
+    if (!GEMINI_API_KEY) {
+        throw new Error("GEMINI_API_KEY is not configured");
     }
+
+    const requestBody = {
+        contents: [
+            {
+                parts: [{ text: prompt }],
+            },
+        ],
+        generationConfig: {
+            temperature: options?.temperature ?? 0.7,
+            topP: options?.top_p ?? 0.9,
+            maxOutputTokens: options?.maxOutputTokens ?? 4096,
+            ...(options?.responseMimeType && options.responseMimeType !== "text/plain"
+                ? { responseMimeType: options.responseMimeType }
+                : {}),
+        },
+    };
+
+    const url = `${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`;
+
+    const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+        const errorBody = await response.text();
+        console.error(`[ai-provider] Gemini API error (${response.status}):`, errorBody);
+
+        // Preserve the original status code so callers can detect 429 / 503 etc.
+        const err: any = new Error(`Gemini API error: ${response.status}`);
+        err.status = response.status;
+        throw err;
+    }
+
+    const data = await response.json();
+
+    // Safe extraction: candidates[0].content.parts[0].text
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+    console.log("AI_RAW_RESPONSE:", text);
+
+    if (!text) {
+        console.error("[ai-provider] Empty response from Gemini. Full payload:", JSON.stringify(data));
+        throw new Error("Gemini returned an empty response");
+    }
+
+    return text;
 }

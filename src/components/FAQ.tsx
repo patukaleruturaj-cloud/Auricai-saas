@@ -19,7 +19,7 @@ const faqs = [
     },
     {
         question: "Is there a free trial?",
-        answer: "Every new account gets 3 free generations to test the quality before committing to a plan. No credit card required to start.",
+        answer: "Every new account gets 5 free generations to test the quality before committing to a plan. No credit card required to start.",
     },
 ];
 
